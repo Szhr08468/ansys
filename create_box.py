@@ -1,11 +1,13 @@
 from ansys.aedt.core import Hfss
+import os
 
 # Launch HFSS using updated PyAEDT syntax
 hfss = Hfss(
     project="MyHFSS_Project",
     design="PatchDesign",
     non_graphical=False,
-    new_desktop=True
+    new_desktop=True,
+    solution_type="DrivenModal"
 )
 
 # Create the substrate box
@@ -125,15 +127,59 @@ port.color = [255, 128, 255]
 # Assign wave port with a simple integration line
 hfss.wave_port(
     port.name,
-    reference_conductors=["Coax"]
+    reference=coax.name,
+    name="1"
 )
 
+# Create setup
+setup = hfss.create_setup("Setup1")
+setup.props["Frequency"] = "2.3GHz"
+setup.props["MaximumPasses"] = 20
+setup.props["DeltaS"] = 0.02
+setup.update()
 
-# Save project
-hfss.save_project()
+# Now add the sweep
+sweep = setup.add_sweep("Sweep")
+sweep.props["SweepType"] = "Fast"
+sweep.props["RangeType"] = "LinearCount"
+sweep.props["RangeStart"] = "2.2GHz"
+sweep.props["RangeEnd"] = "2.4GHz"
+sweep.props["RangeCount"] = 101
+sweep.update()
+
+# Analyze the design
+hfss.analyze()
+
+# Create S11 report inside Ansys GUI
+hfss.post.create_report(
+    expressions=["dB(S(1,1))"],
+    primary_sweep_variable="Freq",
+    variations={"Freq": ["All"]},
+    report_category="S Parameter",
+    context="Setup1",
+    plot_type="Rectangular Plot",
+    # name="S11 Report"
+)
+
+# Get solution data from the report
+solution_data = hfss.post.get_solution_data(
+    expressions=["dB(S(1,1))"],
+    primary_sweep_variable="Freq",
+    context="Setup1"
+)
+
+# Define path to export CSV
+csv_path = os.path.join(hfss.working_directory, "S11.csv")
+
+# Export to CSV
+solution_data.export_data_to_csv(csv_path)
+print(f"S11 data exported to: {csv_path}")
 
 # Wait for user input before closing HFSS
 input("\n✅ HFSS is open. Press Enter to close it...")
+
+# Save project
+hfss.save_project()
 
 # Close and release AEDT
 hfss.release_desktop(close_projects=True, close_desktop=True)

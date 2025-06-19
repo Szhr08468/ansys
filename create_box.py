@@ -7,8 +7,8 @@ hfss = Hfss(
     project="MyHFSS_Project",
     design="FR4PatchDesign",
     non_graphical=False,
-    new_desktop=True
-    # solution_type="DrivenModal"
+    new_desktop=True,
+    solution_type="DrivenModal"
 )
 
 # Specify the material name (must exist in your material library)
@@ -81,18 +81,20 @@ L_sub = round(L_sub, 2)
 xf = round(xf, 2)
 yf = round(yf, 2)
 truncation = round(truncation, 2)
+xf_from_origin = round(xf-round(W/2, 2), 2)
+yf_from_origin = round(yf-round(L/2, 2), 2)
 
 
 # Output
 print("\n================== Computed Patch Antenna Parameters ==================\n")
-print(f"Patch Width (W): {W:.2f} mm")
-print(f"Patch Length (L): {L:.2f} mm")
-print(f"Substrate Width (W_sub): {W_sub:.2f} mm")
-print(f"Substrate Length (L_sub): {L_sub:.2f} mm")
-print(f"Feed Point (x, y): ({xf:.2f} mm, {yf:.2f} mm)")
-print(f"Corner Truncation Size: {truncation:.2f} mm")
-print(f"Effective Dielectric Constant (εeff): {eps_eff:.3f}")
-print("\n======================================================================\n")
+print(f"Patch Width (W): {W} mm")
+print(f"Patch Length (L): {L} mm")
+print(f"Substrate Width (W_sub): {W_sub} mm")
+print(f"Substrate Length (L_sub): {L_sub} mm")
+print(f"Feed Point wrt Origin (x, y): ({xf_from_origin} mm, {yf_from_origin} mm)")
+print(f"Corner Truncation Size: {truncation} mm")
+print(f"Effective Dielectric Constant (εeff): {eps_eff:.2f}")
+print("\n=======================================================================\n")
 
 
 
@@ -124,8 +126,7 @@ hfss.assign_perfecte_to_sheets(ground.name, "PerfectE1")
 # Create circular hole
 hole = hfss.modeler.create_circle(
     orientation="XY",
-    # origin=[0, -1*abs(((L/2)-yf))],
-    origin=[0, -1*yf],
+    origin=[xf_from_origin, yf_from_origin],
     radius=1.6,
     name="Hole"
 )
@@ -133,8 +134,7 @@ hole = hfss.modeler.create_circle(
 hole.color = [255, 128, 64]
 
 # Subtract hole from ground
-hfss.modeler.subtract("Ground", "Hole")
-hfss.modeler.delete("Hole")
+hfss.modeler.subtract("Ground", "Hole", keep_originals=False)
 
 # Create the patch rectangle
 patch = hfss.modeler.create_rectangle(
@@ -147,13 +147,39 @@ patch = hfss.modeler.create_rectangle(
 patch.color = [255, 0, 0]
 patch.transparency = 0.11
 
-# Assign Perfect E boundary condition to the ground
+# Assign Perfect E boundary condition to the patch
 hfss.assign_perfecte_to_sheets(patch.name, "PerfectE2")
+
+
+# --- Top-Left Corner (XY) ---
+tl_base = [-W/2, L/2, h]  # corner point
+tl_pt2 = [-W/2 + truncation, L/2, h]  # right
+tl_pt3 = [-W/2, L/2 - truncation, h]  # down
+
+trunc_tl = hfss.modeler.create_polyline(
+    [tl_base, tl_pt2, tl_pt3, tl_base],
+    cover_surface=True,
+    name="TruncTopLeft"
+)
+
+# --- Bottom-Right Corner (XY) ---
+br_base = [W/2, -L/2, h]  # corner point
+br_pt2 = [W/2 - truncation, -L/2, h]  # left
+br_pt3 = [W/2, -L/2 + truncation, h]  # up
+
+trunc_br = hfss.modeler.create_polyline(
+    [br_base, br_pt2, br_pt3, br_base],
+    cover_surface=True,
+    name="TruncBottomRight"
+)
+
+# --- Subtract triangular cuts from the patch ---
+hfss.modeler.subtract("Patch", ["TruncTopLeft", "TruncBottomRight"], keep_originals=False)
+
 
 # Create the coaxial cable
 coax = hfss.modeler.create_cylinder(
-    # origin=[0, -1*abs(((L/2)-yf)), 0],
-    origin=[0, -1*yf, 0],
+    origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
     height=-1.6,
     radius=1.6,
@@ -163,8 +189,7 @@ coax = hfss.modeler.create_cylinder(
 
 # create the coaxial cable pin
 coax_pin = hfss.modeler.create_cylinder(
-    # origin=[0, -1*abs(((L/2)-yf)), 0],
-    origin=[0, -1*yf, 0],
+    origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
     height=-1.6,
     radius=0.8,
@@ -176,8 +201,7 @@ coax_pin.color = [255, 0, 128]
 
 # create the pin going into the substrate
 probe = hfss.modeler.create_cylinder(
-    # origin=[0, -1*abs(((L/2)-yf)), 0],
-    origin=[0, -1*yf, 0],
+    origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
     height=h,
     radius=0.8,
@@ -208,50 +232,54 @@ hfss.assign_radiation_boundary_to_faces(
 # Create port
 port = hfss.modeler.create_circle(
     orientation="XY",
-    # origin=[0, -1*abs(((L/2)-yf)), -1.6],
-    origin=[0, -1*yf, -1.6],
+    origin=[xf_from_origin, yf_from_origin, -1.6],
     radius=1.6,
     name="Port"
 )
 
 port.color = [255, 128, 255]
 
-# # Assign wave port with a simple integration line
-# hfss.wave_port(
-#     port.name,
-#     reference=coax.name,
-#     name="1"
-# )
+# Assign wave port with a simple integration line
+hfss.wave_port(
+    port.name,
+    reference=coax.name,
+    name="1",
+    renormalize=False
+)
 
-# # Create setup
-# setup = hfss.create_setup("Setup1")
-# setup.props["Frequency"] = "1.575GHz"
-# setup.props["MaximumPasses"] = 20
-# setup.props["DeltaS"] = 0.02
-# setup.update()
+# Create setup
+setup = hfss.create_setup("Setup1")
+setup.props["Frequency"] = "1.575GHz"
+setup.props["MaximumPasses"] = 20
+setup.props["DeltaS"] = 0.02
+setup.update()
 
-# # Now add the sweep
-# sweep = setup.add_sweep("Sweep")
-# sweep.props["SweepType"] = "Fast"
-# sweep.props["RangeType"] = "LinearCount"
-# sweep.props["RangeStart"] = "1GHz"
-# sweep.props["RangeEnd"] = "2GHz"
-# sweep.props["RangeCount"] = 901
-# sweep.update()
+# Now add the sweep
+sweep = setup.add_sweep(
+    name="Sweep",
+    sweep_type="discrete",
+    RangeType="LinearCount",
+    RangeStart="1.4GHz",
+    RangeEnd="1.7GHz",
+    RangeCount=1001
+    # SaveFields=True,
+    # SaveRadFields=False
+)
+sweep.update()
 
-# # Analyze the design
-# hfss.analyze()
+# Analyze the design
+hfss.analyze()
 
-# # Create S11 report inside Ansys GUI
-# hfss.post.create_report(
-#     expressions=["dB(S(1,1))"],
-#     primary_sweep_variable="Freq",
-#     variations={"Freq": ["All"]},
-#     report_category="S Parameter",
-#     context="Setup1",
-#     plot_type="Rectangular Plot",
-#     # name="S11 Report"
-# )
+# Create S11 report inside Ansys GUI
+hfss.post.create_report(
+    expressions=["dB(S(1,1))"],
+    primary_sweep_variable="Freq",
+    variations={"Freq": ["All"]},
+    report_category="S Parameter",
+    context="Setup1",
+    plot_type="Rectangular Plot",
+    # name="S11 Report"
+)
 
 # # Get solution data from the report
 # solution_data = hfss.post.get_solution_data(

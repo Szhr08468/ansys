@@ -28,11 +28,13 @@ if mat_obj:
     # Assign other important variables
     f0 = 1.575e9   # Center frequency in GHz
     h = 1.6        # meters # Substrate thickness in millimeters
+    Cu_Thickness = 0.035  # Copper thickness in millimeters
 
     print("\n================ Antenna Substrate and Design Parameters ================\n")
     print(f"Center Design Frequency: {f0 / 1e9} GHz")
     print(f"Substrate Material: {material_name}")
     print(f"  Substrate Thickness (h): {h} mm")
+    print(f"  Copper on Substrate Thickness (h): {Cu_Thickness} mm")
     print(f"  Relative Permittivity (εr): {eps_r}")
     print(f"  Loss Tangent (tanδ): {tan_d}")
     print(f"  Relative Permeability (μr): {mu_r}")
@@ -61,12 +63,13 @@ delta_L = (0.412 * h) * (((eps_eff + 0.3) * ((W / h) + 0.264)) / ((eps_eff - 0.2
 # Actual Patch Length (L)
 L = (Leff - 2 * delta_L)
 
-# Substrate size (based on patch size plus 6 times the substrate thickness)
-W_sub = W + 6 * h
-L_sub = L + 6 * h
+# W = L = 44.85
+# Substrate size (based on 2 times the Patch dimensions)
+W_sub = 2*W
+L_sub = 2*L
 
 # Corner truncation (for RHCP)
-truncation = round(L * (math.sqrt((4 * f0 * h) / (2 * c * math.sqrt(eps_r)))), 2)
+truncation = round(L * (math.sqrt((4 * f0 * h) / (2 * c * math.sqrt(eps_r)))), 0)
 
 # Feed point location (for coax-fed)
 xf = round(W / 2, 3)
@@ -83,8 +86,25 @@ L_half = round(L / 2, 3)
 W_sub_half = round(W_sub / 2, 3)
 L_sub_half = round(L_sub / 2, 3)
 
-xf_from_origin = round(xf - W_half, 3)   
+xf_from_origin = round(xf - W_half, 3)  
 yf_from_origin = round(yf - L_half, 3)
+
+Coax_h = 5
+Coax_R = 1.6
+Coax_pin_R = 0.8
+patch_top = Cu_Thickness + h + Cu_Thickness
+
+lambda_0 = c / f0  # Free-space wavelength in mm
+air_margin = round( lambda_0 / 4 , 0)  # λ/4 padding
+
+# Calculate box origin and size
+rad_x_origin = -W_sub_half - air_margin
+rad_y_origin = -L_sub_half - air_margin
+rad_z_origin = 0  # Touches ground
+
+rad_x_size = W_sub + 2 * air_margin
+rad_y_size = L_sub + 2 * air_margin
+rad_z_size = patch_top + air_margin  # patch_top = h + 2 * Cu_Thickness
 
 # Output
 print("\n================== Computed Patch Antenna Parameters ==================\n")
@@ -95,131 +115,150 @@ print(f"Substrate Length (L_sub): {L_sub} mm")
 print(f"Feed Point wrt Origin (x, y): ({xf_from_origin} mm, {yf_from_origin} mm)")
 print(f"Corner Truncation Size: {truncation} mm")
 print(f"Effective Dielectric Constant (εeff): {eps_eff:.2f}")
+print(f"Coax Height below Ground: {Coax_h} mm")
+print(f"Radiation Box Margin: {air_margin} mm")
 print("\n=======================================================================\n")
 
 # Create the substrate box
 substrate = hfss.modeler.create_box(
-    [(-1*(W_sub_half)), (-1*(L_sub_half)), 0],              # Position
+    [-W_sub_half, -L_sub_half, Cu_Thickness],              # Position
     [W_sub, L_sub, h],                                # Size (x, y, z)
     name="Substrate",
     material=material_name
 )
-
 substrate.transparency = 0.4
-substrate.color = [143, 175, 175]  # RGB
+substrate.color = [143, 175, 175] 
+hfss.modeler.fit_all()
 
-# Create the ground rectangle
-ground = hfss.modeler.create_rectangle(
-    orientation="XY",
-    origin=[(-1*(W_sub_half)), (-1*(L_sub_half))],
-    sizes=[W_sub, L_sub],
-    name="Ground"
+# --- Create cylindrical hole through substrate (for probe feed) ---
+substrate_hole = hfss.modeler.create_cylinder(
+    origin=[xf_from_origin, yf_from_origin, Cu_Thickness],
+    orientation="Z",
+    radius=Coax_pin_R,  # Radius of the hole
+    height=h,  # Same as substrate thickness
+    name="SubstrateHole"
 )
 
+# Subtract the hole from the substrate
+hfss.modeler.subtract("Substrate", "SubstrateHole", keep_originals=False)
+
+
+# Create the ground plane as a box with thickness
+ground = hfss.modeler.create_box(
+    origin=[-W_sub_half, -L_sub_half, 0],   
+    sizes=[W_sub, L_sub, Cu_Thickness],       
+    name="Ground",
+    material="copper"
+)
 ground.color = [0, 255, 128]
 ground.transparency = 0.06
+hfss.modeler.fit_all()
 
-# Assign Perfect E boundary condition to the ground
-hfss.assign_perfecte_to_sheets(ground.name, "PerfectE1")
 
-# Create circular hole
-hole = hfss.modeler.create_circle(
-    orientation="XY",
-    origin=[xf_from_origin, yf_from_origin],
-    radius=1.6,
-    name="Hole"
+# Create a cylinder as the hole
+hole_cylinder = hfss.modeler.create_cylinder(
+    orientation="XY", 
+    origin=[xf_from_origin, yf_from_origin, 0],
+    radius=Coax_R,
+    height=Cu_Thickness,
+    name="Hole3D"
 )
+hole_cylinder.color = [255, 128, 64]
+hfss.modeler.fit_all()
 
-hole.color = [255, 128, 64]
+# Subtract the 3D hole from the 3D ground
+hfss.modeler.subtract("Ground", "Hole3D", keep_originals=False)
 
-# Subtract hole from ground
-hfss.modeler.subtract("Ground", "Hole", keep_originals=False)
-
-# Create the patch rectangle
-patch = hfss.modeler.create_rectangle(
-    orientation="XY",
-    origin=[-1*(W_half), -1*(L_half), h],
-    sizes=[W, L],
-    name="Patch"
+# Create the patch rectangle with thickness
+patch = hfss.modeler.create_box(
+    origin=[-W_half, -L_half, Cu_Thickness + h],
+    sizes=[W, L, Cu_Thickness],       
+    name="Patch",
+    material="copper"
 )
-
 patch.color = [255, 0, 0]
 patch.transparency = 0.11
+hfss.modeler.fit_all()
 
-# Assign Perfect E boundary condition to the patch
-hfss.assign_perfecte_to_sheets(patch.name, "PerfectE2")
-
+overshoot_TL = 0.0 # small extra margin
 
 # --- Top-Left Corner (XY) ---
-tl_base = [-W_half, L_half, h]  # corner point
-tl_pt2 = [round(-W_half + truncation, 3), L_half, h]  # right
-tl_pt3 = [-W_half, round(L_half - truncation, 3), h]  # down
+tl_base = [-W_half, L_half + overshoot_TL, patch_top]  # corner point extended outside
+tl_pt2  = [-W_half + truncation, L_half, patch_top]  # move right
+tl_pt3  = [-W_half, L_half - truncation, patch_top]  # move down
 
 trunc_tl = hfss.modeler.create_polyline(
     [tl_base, tl_pt2, tl_pt3, tl_base],
     cover_surface=True,
-    name="TruncTopLeft"
+    name="TruncTopLeft",
+    material="copper"
 )
+hfss.modeler.thicken_sheet("TruncTopLeft", Cu_Thickness)
 
 # --- Bottom-Right Corner (XY) ---
-br_base = [W_half, -L_half, h]  # corner point
-br_pt2 = [round(W_half - truncation, 3), -L_half, h]  # left
-br_pt3 = [W_half, round(-L_half + truncation, 3), h]  # up
+overshoot_BR = 0.0 # small extra margin
+br_base = [W_half + overshoot_BR, -L_half, patch_top]  # corner point
+br_pt2 = [W_half - truncation, -L_half, patch_top]  # left
+br_pt3 = [W_half, -L_half + truncation, patch_top]  # up
 
 trunc_br = hfss.modeler.create_polyline(
     [br_base, br_pt2, br_pt3, br_base],
     cover_surface=True,
-    name="TruncBottomRight"
+    name="TruncBottomRight",
+    material="copper"
 )
+hfss.modeler.thicken_sheet("TruncBottomRight", Cu_Thickness)
 
 # --- Subtract triangular cuts from the patch ---
 hfss.modeler.subtract("Patch", ["TruncTopLeft", "TruncBottomRight"], keep_originals=False)
+hfss.modeler.fit_all()
 
 # Create the coaxial cable
 coax = hfss.modeler.create_cylinder(
     origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
-    height=-1.6,
-    radius=1.6,
+    height=-Coax_h,
+    radius=Coax_R,
     name="Coax",
     material="glass_PTFEreinf"
 )
+coax.color = [128, 128, 192]
+coax.transparency = 0.5
 
 # create the coaxial cable pin
 coax_pin = hfss.modeler.create_cylinder(
     origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
-    height=-1.6,
-    radius=0.8,
+    height=-Coax_h,
+    radius=Coax_pin_R,
     name="Coax_Pin",
-    material="pec"
+    material="copper"
 )
-
 coax_pin.color = [255, 0, 128]
+coax_pin.transparency = 0
 
 # create the pin going into the substrate
 probe = hfss.modeler.create_cylinder(
     origin=[xf_from_origin, yf_from_origin, 0],
     orientation="XY",
-    height=h,
-    radius=0.8,
+    height= Cu_Thickness + h,
+    radius=Coax_pin_R,
     name="Probe",
-    material="pec"
+    material="copper"
 )
-
 probe.color = [255, 0, 128]
 probe.transparency = 0.5
 
 # create the radiation box
 airbox = hfss.modeler.create_box(
-    [(-1*(W_sub_half)), (-1*(L_sub_half)), 0],
-    [W_sub, L_sub, 10],           
+    [rad_x_origin, rad_y_origin, rad_z_origin],
+    [rad_x_size, rad_y_size, rad_z_size],           
     name="AirBox",
     material="air"
 )
-
 airbox.transparency = 0.95
 airbox.color = [0, 0, 0]
+hfss.modeler.fit_all()
 
 # Assign radiation boundary to all faces except the bottom (lowest Z-center)
 hfss.assign_radiation_boundary_to_faces(
@@ -230,11 +269,10 @@ hfss.assign_radiation_boundary_to_faces(
 # Create port
 port = hfss.modeler.create_circle(
     orientation="XY",
-    origin=[xf_from_origin, yf_from_origin, -1.6],
+    origin=[xf_from_origin, yf_from_origin, -Coax_h],
     radius=1.6,
     name="Port"
 )
-
 port.color = [255, 128, 255]
 
 # Assign wave port with a simple integration line
@@ -255,7 +293,7 @@ setup.update()
 # Now add the sweep
 sweep = setup.add_sweep(
     name="Sweep",
-    sweep_type="Fast",
+    sweep_type="fast",
     RangeType="LinearCount",
     RangeStart="1.5GHz",
     RangeEnd="1.6GHz",
@@ -299,20 +337,26 @@ txt_path = os.path.join(hfss.working_directory, "params.txt")
 # Save the TXT file
 try:
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(f"Frequency (GHz): {f0 / 1e9:.3f}\n")
+        f.write(f"Center Frequency (GHz): {f0 / 1e9:.3f}\n")
+        f.write(f"Material: {material_name}\n")
         f.write(f"Substrate thickness (h): {h} mm\n")
+        f.write(f"Copper on Substrate thickness (h): {Cu_Thickness} mm\n")
         f.write(f"Relative Permittivity (εr): {eps_r}\n")
+        f.write(f"Effective Dielectric Constant (εeff): {eps_eff:.3f}\n")
+        f.write(f"Loss Tangent: {tan_d}\n")
+        f.write(f"Relative Permeability (μr): {mu_r}\n")
+        f.write(f"Conductivity (σ): {sigma}\n")
         f.write(f"Patch Width (W): {W} mm\n")
         f.write(f"Patch Length (L): {L} mm\n")
         f.write(f"Substrate Width (W_sub): {W_sub} mm\n")
         f.write(f"Substrate Length (L_sub): {L_sub} mm\n")
         f.write(f"Feed Point wrt Origin (x, y): ({xf_from_origin}, {yf_from_origin}) mm\n")
+        f.write(f"Coax Height below Ground: {Coax_h} mm\n")
+        f.write(f"Coax Radius: {Coax_R} mm\n")
+        f.write(f"Coax Pin Radius: {Coax_pin_R} mm\n")
+        f.write(f"Radiation Box Margin: {air_margin} mm\n")
         f.write(f"Corner Truncation Size: {truncation} mm\n")
-        f.write(f"Effective Dielectric Constant (εeff): {eps_eff:.3f}\n")
-        f.write(f"Material: {material_name}\n")
-        f.write(f"Loss Tangent: {tan_d}\n")
-        f.write(f"Relative Permeability (μr): {mu_r}\n")
-        f.write(f"Conductivity (σ): {sigma}\n")
+
     print(f"✅ TXT saved to: {txt_path}")
 except Exception as e:
     print(f"❌ Failed to write TXT file: {e}")

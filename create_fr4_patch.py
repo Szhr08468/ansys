@@ -1,6 +1,7 @@
 from ansys.aedt.core import Hfss
 import os
 import math
+import csv
 
 # Launch HFSS using updated PyAEDT syntax
 hfss = Hfss(
@@ -26,7 +27,7 @@ if mat_obj:
     sigma = material.conductivity.value                  # Conductivity (for conductors)
 
     # Assign other important variables
-    f0 = 1.575e9   # Center frequency in GHz
+    f0 = 1.57542e9   # Center frequency in GHz
     h = 1.6        # meters # Substrate thickness in millimeters
     Cu_Thickness = 0.035  # Copper thickness in millimeters
 
@@ -63,13 +64,15 @@ delta_L = (0.412 * h) * (((eps_eff + 0.3) * ((W / h) + 0.264)) / ((eps_eff - 0.2
 # Actual Patch Length (L)
 L = (Leff - 2 * delta_L)
 
-# W = L = 44.85
+W = L = 45
+# W=48
+# L=48  
 # Substrate size (based on 2 times the Patch dimensions)
 W_sub = 2*W
 L_sub = 2*L
 
 # Corner truncation (for RHCP)
-truncation = round(L * (math.sqrt((4 * f0 * h) / (2 * c * math.sqrt(eps_r)))), 0)
+truncation = 6#round(L * (math.sqrt((4 * f0 * h) / (2 * c * math.sqrt(eps_r)))), 0)
 
 # Feed point location (for coax-fed)
 xf = round(W / 2, 3)
@@ -87,7 +90,7 @@ W_sub_half = round(W_sub / 2, 3)
 L_sub_half = round(L_sub / 2, 3)
 
 xf_from_origin = round(xf - W_half, 3)  
-yf_from_origin = round(yf - L_half, 3)
+yf_from_origin = round(yf - L_half, 0) -2.3873
 
 Coax_h = 5
 Coax_R = 1.6
@@ -285,7 +288,7 @@ hfss.wave_port(
 
 # Create setup
 setup = hfss.create_setup("Setup1")
-setup.props["Frequency"] = "1.575GHz"
+setup.props["Frequency"] = "1.57542GHz"
 setup.props["MaximumPasses"] = 20
 setup.props["DeltaS"] = 0.02
 setup.update()
@@ -295,13 +298,27 @@ sweep = setup.add_sweep(
     name="Sweep",
     sweep_type="fast",
     RangeType="LinearCount",
-    RangeStart="1.5GHz",
-    RangeEnd="1.6GHz",
-    RangeCount=2001
-    # SaveFields=True,
-    # SaveRadFields=False
+    RangeStart="1.54GHz",
+    RangeEnd="1.58GHz",
+    RangeCount= 2001,
+    SaveFields=True,
+    SaveRadFields=True
 )
 sweep.update()
+
+
+# Add infinite sphere with specified angular ranges
+sphere = hfss.insert_infinite_sphere(
+    definition="Theta-Phi",
+    x_start=-180,      # Theta start
+    x_stop=180,        # Theta stop
+    x_step=10,         # Theta step
+    y_start=0,         # Phi start
+    y_stop=360,        # Phi stop
+    y_step=10,         # Phi step
+    units="deg",
+    name="InfiniteSphere1"
+)
 
 # Analyze the design
 hfss.analyze()
@@ -330,6 +347,58 @@ csv_path = os.path.join(hfss.working_directory, "S11.csv")
 # Export to CSV
 solution_data.export_data_to_csv(csv_path)
 print(f"✅ CSV saved to: {csv_path}")
+
+hfss.post.create_report(
+    expressions=["dB(AxialRatioValue)"],
+    primary_sweep_variable="Theta",
+    variations={
+        "Freq": ["1.57542GHz"],
+        "Phi": ["0deg"],
+        "Theta": [f"{i}deg" for i in range(-180, 181, 10)]
+    },
+    context="InfiniteSphere1",
+    report_category="Far Fields",
+    plot_type="Rectangular Plot"
+    # name="AxialRatio_Phi0deg"
+)
+
+ar_data = hfss.post.get_solution_data(
+    expressions=["db(AxialRatioValue)"],              
+    primary_sweep_variable="Theta",
+    report_category="Far Fields",
+    context="InfiniteSphere1",                    
+    variations={
+        "Freq": ["1.57542GHz"],
+        "Phi": ["0deg"]
+    }
+)
+
+# Export to CSV
+ar_csv_path = os.path.join(hfss.working_directory, "AxialRatio_vs_Theta.csv")
+ar_data.export_data_to_csv(ar_csv_path)
+print(f"✅ CSV saved to: {ar_csv_path}")
+
+try:
+    with open(ar_csv_path, mode="r", encoding="utf-8") as file:
+        reader = csv.DictReader(file, delimiter=";")
+        for row in reader:
+            try:
+                theta = float(row["Theta [deg]"])
+                phi = float(row["Phi [deg]"])
+                freq = float(row["Freq [GHz]"])
+
+                if abs(theta) < 1e-3 and abs(phi) < 1e-3 and abs(freq - 1.57542) < 1e-5:
+                    ar_val = float(row["db(AxialRatioValue)"])
+                    print(f"📌 Axial Ratio at θ = 0°, ϕ = 0°: {ar_val:.2f} dB")
+                    break
+            except ValueError:
+                continue  # Skip malformed lines
+        else:
+            print("❌ θ = 0°, ϕ = 0°, f = 1.57542 GHz not found in CSV.")
+
+except Exception as e:
+    print(f"❌ Failed to read CSV: {e}")
+
 
 # Define path for TXT file in same directory
 txt_path = os.path.join(hfss.working_directory, "params.txt")
@@ -372,3 +441,4 @@ hfss.save_project()
 # Close and release AEDT
 hfss.release_desktop(close_projects=True, close_desktop=True)
 print("✅ HFSS closed.")
+
